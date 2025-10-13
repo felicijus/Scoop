@@ -35,7 +35,7 @@ if ($err) { "scoop update: $err"; exit 1 }
 $global = $opt.g -or $opt.global
 $force = $opt.f -or $opt.force
 $check_hash = !($opt.s -or $opt.'skip-hash-check')
-$check_virustotal = $opt.w -or $opt.'virustotal-check'
+$check_virustotal = $opt.w -or $opt.'virustotal-check' -or (get_config USE_VIRUSTOTAL $false)
 $use_cache = !($opt.k -or $opt.'no-cache')
 $quiet = $opt.q -or $opt.quiet
 $independent = $opt.i -or $opt.independent

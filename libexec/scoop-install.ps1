@@ -49,7 +49,7 @@ if ($err) { "scoop install: $err"; exit 1 }
 
 $global = $opt.g -or $opt.global
 $check_hash = !($opt.s -or $opt.'skip-hash-check')
-$check_virustotal = $opt.w -or $opt.'virustotal-check'
+$check_virustotal = $opt.w -or $opt.'virustotal-check' -or (get_config USE_VIRUSTOTAL $false)
 $independent = $opt.i -or $opt.independent
 $use_cache = !($opt.k -or $opt.'no-cache')
 $architecture = Get-DefaultArchitecture
