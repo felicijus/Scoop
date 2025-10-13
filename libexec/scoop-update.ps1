@@ -11,6 +11,7 @@
 #   -i, --independent      Don't install dependencies automatically
 #   -k, --no-cache         Don't use the download cache
 #   -s, --skip-hash-check  Skip hash validation (use with caution!)
+#   -w, --virustotal-check Check the download against VirusTotal (may be slow)
 #   -q, --quiet            Hide extraneous messages
 #   -a, --all              Update all apps (alternative to '*')
 
@@ -29,11 +30,12 @@ if (get_config USE_SQLITE_CACHE) {
     . "$PSScriptRoot\..\lib\database.ps1"
 }
 
-$opt, $apps, $err = getopt $args 'gfiksqa' 'global', 'force', 'independent', 'no-cache', 'skip-hash-check', 'quiet', 'all'
+$opt, $apps, $err = getopt $args 'gfikswqa' 'global', 'force', 'independent', 'no-cache', 'skip-hash-check', 'quiet', 'all'
 if ($err) { "scoop update: $err"; exit 1 }
 $global = $opt.g -or $opt.global
 $force = $opt.f -or $opt.force
 $check_hash = !($opt.s -or $opt.'skip-hash-check')
+$check_virustotal = $opt.w -or $opt.'virustotal-check'
 $use_cache = !($opt.k -or $opt.'no-cache')
 $quiet = $opt.q -or $opt.quiet
 $independent = $opt.i -or $opt.independent
@@ -258,7 +260,7 @@ function Sync-Bucket {
     }
 }
 
-function update($app, $global, $quiet = $false, $independent, $suggested, $use_cache = $true, $check_hash = $true) {
+function update($app, $global, $quiet = $false, $independent, $suggested, $use_cache = $true, $check_hash = $true, $check_virustotal = $false) {
     $old_version = Select-CurrentVersion -AppName $app -Global:$global
     $old_manifest = installed_manifest $app $old_version $global
     $install = install_info $app $old_version $global
@@ -376,12 +378,12 @@ function update($app, $global, $quiet = $false, $independent, $suggested, $use_c
     }
 
     if ($independent) {
-        install_app $app $architecture $global $suggested $use_cache $check_hash
+        install_app $app $architecture $global $suggested $use_cache $check_hash $check_virustotal
     } else {
         # Also add missing dependencies
         $apps = @(Get-Dependency $app $architecture) -ne $app
         ensure_none_failed $apps
-        $apps.Where({ !(installed $_) }) + $app | ForEach-Object { install_app $_ $architecture $global $suggested $use_cache $check_hash }
+        $apps.Where({ !(installed $_) }) + $app | ForEach-Object { install_app $_ $architecture $global $suggested $use_cache $check_hash $check_virustotal}
     }
 }
 
@@ -462,7 +464,7 @@ if (-not ($apps -or $all)) {
 
     $suggested = @{}
     # $outdated is a list of ($app, $global) tuples
-    $outdated | ForEach-Object { update @_ $quiet $independent $suggested $use_cache $check_hash }
+    $outdated | ForEach-Object { update @_ $quiet $independent $suggested $use_cache $check_hash $check_virustotal }
 }
 
 exit 0
