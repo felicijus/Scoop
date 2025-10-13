@@ -789,7 +789,7 @@ function check_virustotal($app_name, $url) {
 
     $stats = 1
     try {
-        $stats = [int](Get-VirusTotalResultByUrl $url $app_name)
+        $stats = [int](Test-VirusTotalUrl $url $app_name)
     } catch [Exception] {
         $stats = $_ERR_EXCEPTION
         Write-Host 'failed.' -f DarkRed

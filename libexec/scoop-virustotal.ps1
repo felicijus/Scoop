@@ -58,20 +58,7 @@ if (!$opt.n -and !$opt.'no-depends') {
     $apps = $apps | Get-Dependency -Architecture $architecture | Select-Object -Unique
 }
 
-$_ERR_UNSAFE = 2
-$_ERR_EXCEPTION = 4
-$_ERR_NO_INFO = 8
-$_ERR_NO_API_KEY = 16
-
 $exit_code = 0
-
-# Global API key:
-$api_key = get_config VIRUSTOTAL_API_KEY
-if (!$api_key) {
-    abort ("VirusTotal API key is not configured`n" +
-        "  You could get one from https://www.virustotal.com/gui/my-apikey and set with`n" +
-        "  scoop config virustotal_api_key <API key>") $_ERR_NO_API_KEY
-}
 
 # Global flag to explain only once about sleep between requests
 $explained_rate_limit_sleeping = $False
@@ -79,192 +66,6 @@ $explained_rate_limit_sleeping = $False
 # Requests counter to slow down requests submitted to VirusTotal as
 # script execution progresses
 $requests = 0
-
-Function Get-VirusTotalResultByHash ($hash, $url, $app) {
-    $hash = $hash.ToLower()
-    $api_url = "https://www.virustotal.com/api/v3/files/$hash"
-    $headers = @{}
-    $headers.Add('Accept', 'application/json')
-    $headers.Add('x-apikey', $api_key)
-    $response = Invoke-WebRequest -Uri $api_url -Method GET -Headers $headers -UseBasicParsing
-    $result = $response.Content
-    $stats = json_path $result '$.data.attributes.last_analysis_stats'
-    [int]$malicious = json_path $stats '$.malicious'
-    [int]$suspicious = json_path $stats '$.suspicious'
-    [int]$timeout = json_path $stats '$.timeout'
-    [int]$undetected = json_path $stats '$.undetected'
-    [int]$unsafe = $malicious + $suspicious
-    [int]$total = $unsafe + $undetected
-    [int]$fileSize = json_path $result '$.data.attributes.size'
-    $report_hash = json_path $result '$.data.attributes.sha256'
-    $report_url = "https://www.virustotal.com/gui/file/$report_hash"
-    if ($total -eq 0) {
-        info "$app`: Analysis in progress."
-        [PSCustomObject] @{
-            'App.Name'        = $app
-            'App.Url'         = $url
-            'App.Hash'        = $hash
-            'App.HashType'    = $null
-            'App.Size'        = filesize $fileSize
-            'FileReport.Url'  = $report_url
-            'FileReport.Hash' = $report_hash
-            'UrlReport.Url'   = $null
-        }
-    } else {
-        $vendorResults = (ConvertFrom-Json((json_path $result '$.data.attributes.last_analysis_results'))).PSObject.Properties.Value
-        switch ($unsafe) {
-            0 {
-                success "$app`: $unsafe/$total, see $report_url"
-            }
-            1 {
-                warn "$app`: $unsafe/$total, see $report_url"
-            }
-            2 {
-                warn "$app`: $unsafe/$total, see $report_url"
-            }
-            Default {
-                warn "$([char]0x1b)[31m$app`: $unsafe/$total, see $report_url$([char]0x1b)[0m"
-            }
-        }
-        $maliciousResults = $vendorResults |
-            Where-Object -Property category -EQ 'malicious' |
-            Select-Object -ExpandProperty engine_name
-        $suspiciousResults = $vendorResults |
-            Where-Object -Property category -EQ 'suspicious' |
-            Select-Object -ExpandProperty engine_name
-        [PSCustomObject] @{
-            'App.Name'              = $app
-            'App.Url'               = $url
-            'App.Hash'              = $hash
-            'App.HashType'          = $null
-            'App.Size'              = filesize $fileSize
-            'FileReport.Url'        = $report_url
-            'FileReport.Hash'       = $report_hash
-            'FileReport.Malicious'  = if ($maliciousResults) { $maliciousResults } else { 0 }
-            'FileReport.Suspicious' = if ($suspiciousResults) { $suspiciousResults } else { 0 }
-            'FileReport.Timeout'    = $timeout
-            'FileReport.Undetected' = $undetected
-            'UrlReport.Url'         = $null
-        }
-    }
-    if ($unsafe -gt 0) {
-        $Script:exit_code = $exit_code -bor $_ERR_UNSAFE
-    }
-}
-
-Function Get-VirusTotalResultByUrl ($url, $app) {
-    $id = ConvertTo-VirusTotalUrlId $url
-    $api_url = "https://www.virustotal.com/api/v3/urls/$id"
-    $headers = @{}
-    $headers.Add('Accept', 'application/json')
-    $headers.Add('x-apikey', $api_key)
-    $response = Invoke-WebRequest -Uri $api_url -Method GET -Headers $headers -UseBasicParsing
-    $result = $response.Content
-    $id = json_path $result '$.data.id'
-    $hash = json_path $result '$.data.attributes.last_http_response_content_sha256' 6>$null
-    $last_analysis_date = json_path $result '$.data.attributes.last_analysis_date' 6>$null
-    $url_report_url = "https://www.virustotal.com/gui/url/$id"
-    info "$app`: Url report found."
-    if (!$hash) {
-        if (!$last_analysis_date) {
-            info "$app`: Analysis in progress."
-        } else {
-            info "$app`: Related file report not found."
-            warn "$app`: Manual file upload is required (instead of url submission)."
-        }
-        [PSCustomObject] @{
-            'App.Name'       = $app
-            'App.Url'        = $url
-            'App.Hash'       = $null
-            'App.HashType'   = $null
-            'FileReport.Url' = $null
-            'UrlReport.Url'  = $url_report_url
-            'UrlReport.Hash' = $null
-        }
-    } else {
-        info "$app`: Related file report found."
-        [PSCustomObject] @{
-            'App.Name'       = $app
-            'App.Url'        = $url
-            'App.Hash'       = $null
-            'App.HashType'   = $null
-            'FileReport.Url' = $null
-            'UrlReport.Url'  = $url_report_url
-            'UrlReport.Hash' = $hash
-        }
-    }
-}
-
-# Submit-ToVirusTotal
-# - $url: where file to check can be downloaded
-# - $app: Name of the application (used for reporting)
-# - $do_scan: [boolean flag] whether to actually submit to VirusTotal
-#             This is a parameter instead of conditionnally calling
-#             the function to consolidate the warning message
-# - $retrying: [boolean] Optional, for internal use to retry
-#              submitting the file after a delay if the rate limit is
-#              exceeded, without risking an infinite loop (as stack
-#              overflow) if the submission keeps failing.
-Function Submit-ToVirusTotal ($url, $app, $do_scan, $retrying = $False) {
-    if (!$do_scan) {
-        warn "$app`: not found`: you can manually submit $url"
-        return
-    }
-
-    try {
-        $requests += 1
-
-        $encoded_url = [System.Web.HttpUtility]::UrlEncode($url)
-        $api_url = 'https://www.virustotal.com/api/v3/urls'
-        $content_type = 'application/x-www-form-urlencoded'
-        $headers = @{}
-        $headers.Add('Accept', 'application/json')
-        $headers.Add('x-apikey', $api_key)
-        $headers.Add('Content-Type', $content_type)
-        $body = "url=$encoded_url"
-        $result = Invoke-WebRequest -Uri $api_url -Method POST -Headers $headers -ContentType $content_type -Body $body -UseBasicParsing
-        if ($result.StatusCode -eq 200) {
-            $id = ((json_path $result '$.data.id') -split '-')[1]
-            $url_report_url = "https://www.virustotal.com/gui/url/$id"
-            $fileSize = Get-RemoteFileSize $url
-            if ($fileSize -gt 80000000) {
-                info "$app`: Remote file size: $(filesize $fileSize). Large files might require manual file upload instead of url submission."
-            }
-            info "$app`: Analysis in progress."
-            [PSCustomObject] @{
-                'App.Name'       = $app
-                'App.Url'        = $url
-                'App.Size'       = filesize $fileSize
-                'FileReport.Url' = $null
-                'UrlReport.Url'  = $url_report_url
-            }
-            return
-        }
-
-        # EAFP: submission failed -> sleep, then retry
-        if (!$retrying) {
-            if (!$explained_rate_limit_sleeping) {
-                $explained_rate_limit_sleeping = $True
-                info "Sleeping 60+ seconds between requests due to VirusTotal's 4/min limit"
-            }
-            Start-Sleep -s (60 + $requests)
-            Submit-ToVirusTotal $url $app $do_scan $True
-        } else {
-            warn "$app`: VirusTotal submission of $url failed`:`n" +
-            "`tAPI returned $($result.StatusCode) after retrying"
-        }
-    } catch [Exception] {
-        warn "$app`: VirusTotal submission failed`: $($_.Exception.Message)"
-        return
-    }
-}
-
-# The library sould provide:
-# - ConvertTo-VirusTotalUrlId
-# - Get-RemoteFileSize
-# - Get-VirusTotalResultByHash
-# - Get-VirusTotalResultByUrl
-# - Submit-ToVirusTotal
 $reports = $apps | ForEach-Object {
     $app = $_
     $null, $manifest, $bucket, $null = Get-Manifest $app
@@ -298,7 +99,7 @@ $reports = $apps | ForEach-Object {
                 $algo = 'sha256'
             }
             if ($hash) {
-                $file_report = Get-VirusTotalResultByHash $hash $url $app
+                $file_report = Test-VirusTotalHash $hash $url $app -ReturnObject
                 $file_report.'App.HashType' = $algo
                 $file_report
                 return
@@ -320,7 +121,11 @@ $reports = $apps | ForEach-Object {
         }
 
         try {
-            $url_report = Get-VirusTotalResultByUrl $url $app
+            $ok, $url_report = Test-VirusTotalUrl $url $app -ReturnObject
+            if (-not $ok) {
+                warn "$app`: Unable to get url report for $url, $url_report"
+                throw $url_report.ErrorMsg
+            }
             $url_report.'App.Hash' = $hash
             $url_report.'App.HashType' = $algo
             if ($url_report.'UrlReport.Hash' -and ($file_report_not_found -eq $true) -and $hash) {
@@ -356,7 +161,7 @@ $reports = $apps | ForEach-Object {
         }
 
         try {
-            $file_report = Get-VirusTotalResultByHash $url_report.'UrlReport.Hash' $url $app
+            $file_report = Test-VirusTotalHash $url_report.'UrlReport.Hash' $url $app -ReturnObject
             $file_report.'App.Hash' = $hash
             $file_report.'App.HashType' = $algo
             $file_report.'UrlReport.Url' = $url_report.'UrlReport.Url'
