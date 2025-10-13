@@ -2,7 +2,7 @@
 
 ## Meta downloader
 
-function Invoke-ScoopDownload ($app, $version, $manifest, $bucket, $architecture, $dir, $use_cache = $true, $check_hash = $true) {
+function Invoke-ScoopDownload ($app, $version, $manifest, $bucket, $architecture, $dir, $use_cache = $true, $check_hash = $true, $check_virustotal = $false) {
     # we only want to show this warning once
     if (!$use_cache) { warn 'Cache is being ignored.' }
 
@@ -40,6 +40,19 @@ function Invoke-ScoopDownload ($app, $version, $manifest, $bucket, $architecture
                         Write-Host -ForegroundColor Yellow 'SourceForge.net is known for causing hash validation fails. Please try again before opening a ticket.'
                     }
                     abort $(new_issue_msg $app $bucket 'hash check failed')
+                }
+            }
+
+            if ($check_virustotal) {
+                $ok, $err = check_virustotal $(show_app $app $bucket) $url
+                if (!$ok) {
+                    error $err
+                    $cached = cache_path $app $version $url
+                    if (Test-Path $cached) {
+                        # rm cached file
+                        Remove-Item -Force $cached
+                    }
+                    abort $(new_issue_msg $app $bucket 'virustotal check failed')
                 }
             }
         }
@@ -457,9 +470,9 @@ function Invoke-CachedAria2Download ($app, $version, $manifest, $architecture, $
             warn "Download failed! (Error $lastexitcode) $(aria_exit_code $lastexitcode)"
             warn $urlstxt_content
             warn $aria2
-            warn $(new_issue_msg $app $bucket "download via aria2 failed")
+            warn $(new_issue_msg $app $bucket 'download via aria2 failed')
 
-            Write-Host "Fallback to default downloader ..."
+            Write-Host 'Fallback to default downloader ...'
 
             try {
                 foreach ($url in $urls) {
@@ -666,7 +679,7 @@ function get_magic_bytes_pretty($file, $glue = ' ') {
     return (get_magic_bytes $file | ForEach-Object { $_.ToString('x2') }) -join $glue
 }
 
-Function Get-RemoteFileSize ($Uri) {
+function Get-RemoteFileSize ($Uri) {
     $response = Invoke-WebRequest -Uri $Uri -Method HEAD -UseBasicParsing
     if (!$response.Headers.StatusCode) {
         $response.Headers.'Content-Length' | ForEach-Object { [int]$_ }
@@ -689,13 +702,13 @@ function url_remote_filename($url) {
     # this function extracts the original filename from the URL.
     $uri = (New-Object URI $url)
     $basename = Split-Path $uri.PathAndQuery -Leaf
-    If ($basename -match '.*[?=]+([\w._-]+)') {
+    if ($basename -match '.*[?=]+([\w._-]+)') {
         $basename = $matches[1]
     }
-    If (($basename -notlike '*.*') -or ($basename -match '^[v.\d]+$')) {
+    if (($basename -notlike '*.*') -or ($basename -match '^[v.\d]+$')) {
         $basename = Split-Path $uri.AbsolutePath -Leaf
     }
-    If (($basename -notlike '*.*') -and ($uri.Fragment -ne '')) {
+    if (($basename -notlike '*.*') -and ($uri.Fragment -ne '')) {
         $basename = $uri.Fragment.Trim('/', '#')
     }
     return $basename
@@ -763,6 +776,36 @@ function get_hash([String] $multihash) {
     }
 
     return $type, $hash.ToLower()
+}
+
+function check_virustotal($app_name, $url) {
+    # returns (ok, err)
+    # Use the library function from virustotal.ps1
+    . "$PSScriptRoot\virustotal.ps1"
+
+    Write-Host 'Checking Virustotal for ' -NoNewline
+    Write-Host $(url_remote_filename $url) -f Cyan -NoNewline
+    Write-Host ' ... ' -NoNewline
+
+    $stats = 1
+    try {
+        $stats = [int](Get-VirusTotalResultByUrl $url $app_name)
+    } catch [Exception] {
+        $stats = $_ERR_EXCEPTION
+        Write-Host 'failed.' -f DarkRed
+        return $false, "Exception while contacting VirusTotal`: $($_.Exception.Message)"
+    }
+
+    if ($stats -gt 0) {
+        $msg = "Virustotal check detected issues!`n"
+        $msg += "App:         $app_name`n"
+        $msg += "URL:         $url`n"
+        Write-Host 'failed.' -f DarkRed
+        return $false, $msg
+    }
+
+    Write-Host 'ok.' -f Green
+    return $true, $null
 }
 
 # Setup proxy globally

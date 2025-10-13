@@ -34,6 +34,7 @@
 . "$PSScriptRoot\..\lib\json.ps1" # 'json_path'
 . "$PSScriptRoot\..\lib\download.ps1" # 'hash_for_url'
 . "$PSScriptRoot\..\lib\depends.ps1" # 'Get-Dependency'
+. "$PSScriptRoot\..\lib\virustotal.ps1" # VirusTotal functions
 
 $opt, $apps, $err = getopt $args 'asnup' @('all', 'scan', 'no-depends', 'no-update-scoop', 'passthru')
 if ($err) { "scoop virustotal: $err"; exit 1 }
@@ -78,14 +79,6 @@ $explained_rate_limit_sleeping = $False
 # Requests counter to slow down requests submitted to VirusTotal as
 # script execution progresses
 $requests = 0
-
-Function ConvertTo-VirusTotalUrlId ($url) {
-    $url_id = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($url))
-    $url_id = $url_id -replace '\+', '-'
-    $url_id = $url_id -replace '/', '_'
-    $url_id = $url_id -replace '=', ''
-    $url_id
-}
 
 Function Get-VirusTotalResultByHash ($hash, $url, $app) {
     $hash = $hash.ToLower()
@@ -266,6 +259,12 @@ Function Submit-ToVirusTotal ($url, $app, $do_scan, $retrying = $False) {
     }
 }
 
+# The library sould provide:
+# - ConvertTo-VirusTotalUrlId
+# - Get-RemoteFileSize
+# - Get-VirusTotalResultByHash
+# - Get-VirusTotalResultByUrl
+# - Submit-ToVirusTotal
 $reports = $apps | ForEach-Object {
     $app = $_
     $null, $manifest, $bucket, $null = Get-Manifest $app
